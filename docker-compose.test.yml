@@ -22,6 +22,7 @@ services:
       - MOVIES_PATH=/downloads/movies
       - TV_PATH=/downloads/tv
       - LOG_LEVEL=DEBUG
+      - INDEXER_API_KEY=test-key-replace-with-real
     networks:
       - test-network
 

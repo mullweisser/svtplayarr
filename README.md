@@ -11,6 +11,7 @@ SVTPlayArr is a service that integrates SVT Play and NRK (the respective public 
 - Automatic content detection on SVT Play and NRK
 - Integration with Jellyseerr and Overseerr webhooks
 - Full svtplay-dl configuration support
+- Newznab indexer and SABnzbd download client for Sonarr and Radarr
 - Automatic Sonarr/Radarr notification after download
 - Daily updates of svtplay-dl from GitHub releases
 - RESTful API for manual operations
@@ -85,6 +86,39 @@ The webhook URL depends on your setup:
 | `MOVIES_PATH` | Movies download path | `/downloads/movies` |
 | `TV_PATH` | TV shows download path | `/downloads/tv` |
 | `LOG_LEVEL` | Logging level | `INFO` |
+| `INDEXER_API_KEY` | API key for the Newznab indexer and SABnzbd client | Generated into `/config/api_key` |
+
+## Sonarr and Radarr
+
+svtplayarr speaks the same two protocols as the BBC iPlayer tools. Add it twice in each app, with one API key. The key is on the service home page, `http://<host>:2626/`, and in the log the first time it is generated.
+
+### Indexer
+
+Settings → Indexers → Add → Newznab.
+
+| Field | Value |
+| --- | --- |
+| URL | `http://svtplayarr:2626/newznab` |
+| API key | `INDEXER_API_KEY` |
+| Categories | Sonarr: 5000. Radarr: 2000 |
+
+Sonarr adds `/api` itself, so the live path is `/newznab/api`. On the indexer, set Download Client to the SABnzbd entry below so grabs stay out of any other download client.
+
+### Download client
+
+Settings → Download Clients → Add → SABnzbd.
+
+| Field | Value |
+| --- | --- |
+| Host | `svtplayarr` |
+| Port | `2626` |
+| URL base | `/sabnzbd` |
+| API key | the same key |
+| Category | Sonarr: `tv`. Radarr: `movies` |
+
+A search returns an NZB. Sonarr or Radarr posts that NZB back to this service, which downloads the episode or movie with svtplay-dl. Finished files are written under `/downloads/tv` or `/downloads/movies`. Those paths have to be the paths the *arr app can read, or you need a remote path mapping.
+
+TV results use the title Sonarr searched for, plus `SxxExx`, so the release maps back to that series. The catalogue is SVT Play. A series whose TVDB name differs from the SVT title will not match. Movie results use the SVT title and production year. NRK is still only available through the webhook.
 
 ### SVTPlay-dl Options
 

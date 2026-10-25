@@ -7,11 +7,19 @@ import threading
 import time
 import shutil
 from pathlib import Path
+from xml.sax.saxutils import escape
+
 from flask import Flask, request, jsonify
 import schedule
 import yaml
 from arr_integration import ArrIntegration
+from auth import load_api_key
+from catalog import Catalog
 from content_matcher import ContentMatcher
+from newznab import bp as newznab_bp
+from sabnzbd import bp as sabnzbd_bp
+from sabnzbd import start_worker
+from store import JobStore
 
 # Configure logging
 logging.basicConfig(
@@ -29,13 +37,13 @@ class SVTPlayArr:
         self.content_matcher = ContentMatcher()
         
     def load_config(self):
-        config_path = Path('/config/config.yml')
+        config_path = Path(os.environ.get('CONFIG_DIR', '/config')) / 'config.yml'
         if config_path.exists():
             with open(config_path, 'r') as f:
-                return yaml.safe_load(f)
-        return self.create_default_config()
+                return yaml.safe_load(f) or {}
+        return self.create_default_config(config_path)
     
-    def create_default_config(self):
+    def create_default_config(self, config_path):
         default_config = {
             'svtplay_dl': {
                 'quality': 'best',
@@ -56,10 +64,12 @@ class SVTPlayArr:
             }
         }
         
-        config_path = Path('/config/config.yml')
-        config_path.parent.mkdir(exist_ok=True)
-        with open(config_path, 'w') as f:
-            yaml.dump(default_config, f, default_flow_style=False)
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, 'w') as f:
+                yaml.dump(default_config, f, default_flow_style=False)
+        except OSError as exc:
+            logger.warning("Could not write default config %s: %s", config_path, exc)
         
         return default_config
     
@@ -147,6 +157,48 @@ class SVTPlayArr:
         return self.arr_integration.notify_sonarr_download(title, path)
 
 svtplayarr = SVTPlayArr()
+
+def mount_indexer(flask_app):
+    config_dir = Path(os.environ.get('CONFIG_DIR', '/config'))
+    flask_app.config['INDEXER_API_KEY'] = load_api_key()
+    flask_app.config['STORE'] = JobStore(os.environ.get('JOBS_DB', str(config_dir / 'jobs.sqlite')))
+    flask_app.config['CATALOG'] = Catalog()
+    flask_app.config['DOWNLOAD_ROOT'] = os.environ.get('DOWNLOAD_ROOT', '/downloads')
+    flask_app.register_blueprint(newznab_bp, url_prefix='/newznab')
+    flask_app.register_blueprint(sabnzbd_bp, url_prefix='/sabnzbd')
+
+mount_indexer(app)
+
+@app.route('/')
+def home():
+    key = escape(app.config['INDEXER_API_KEY'])
+    base = escape(request.host_url.rstrip('/'))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>svtplayarr</title></head>
+<body>
+<h1>svtplayarr</h1>
+<p>Add this service in Sonarr and Radarr as a Newznab indexer and again as a SABnzbd download client. Both use the same API key.</p>
+<p>API key: <code>{key}</code></p>
+<h2>Indexer</h2>
+<ul>
+<li>Type: Newznab</li>
+<li>URL: <code>{base}/newznab</code></li>
+<li>API key: the key above</li>
+<li>Sonarr categories: 5000. Radarr categories: 2000.</li>
+<li>Set the indexer's download client to the SABnzbd entry below.</li>
+</ul>
+<h2>Download client</h2>
+<ul>
+<li>Type: SABnzbd</li>
+<li>Host: this host, port 2626, URL base <code>/sabnzbd</code></li>
+<li>API key: the key above</li>
+<li>Sonarr category: <code>tv</code>. Radarr category: <code>movies</code>.</li>
+</ul>
+<p>Completed files land in <code>/downloads/tv</code> and <code>/downloads/movies</code> inside this container. Sonarr and Radarr need those same paths, or a remote path mapping.</p>
+<p>Searches use the SVT Play title. A series stored under a different TVDB name will not match.</p>
+</body>
+</html>"""
 
 @app.route('/health')
 def health():
@@ -275,7 +327,8 @@ def update_config():
         if new_config:
             svtplayarr.config.update(new_config)
             
-            config_path = Path('/config/config.yml')
+            config_path = Path(os.environ.get('CONFIG_DIR', '/config')) / 'config.yml'
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, 'w') as f:
                 yaml.dump(svtplayarr.config, f, default_flow_style=False)
             
@@ -309,6 +362,7 @@ if __name__ == '__main__':
     # Start scheduler in background
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
+    start_worker(app)
     
     # Start Flask app
     app.run(host='0.0.0.0', port=2626, debug=False)
