@@ -9,13 +9,15 @@ services:
       - "2626:2626"
     volumes:
       - ./config:/config
+      - ${MOVIES_PATH:-./downloads/movies}:/downloads/movies
+      - ${TV_PATH:-./downloads/tv}:/downloads/tv
     environment:
       - SONARR_API_KEY=${SONARR_API_KEY}
       - SONARR_URL=${SONARR_URL}
       - RADARR_API_KEY=${RADARR_API_KEY}
       - RADARR_URL=${RADARR_URL}
-      - MOVIES_PATH=${MOVIES_PATH}
-      - TV_PATH=${TV_PATH}
+      - MOVIES_PATH=/downloads/movies
+      - TV_PATH=/downloads/tv
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
    # networks:
      # - arr-network
