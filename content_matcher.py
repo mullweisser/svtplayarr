@@ -2,9 +2,29 @@ import re
 import requests
 import logging
 from typing import Optional, List, Dict
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+SVT_GRAPHQL_URL = "https://contento.svt.se/graphql"
+SVT_SEARCH_QUERY = """
+query Search($query: String!, $maxHits: Int) {
+  searchPage(query: $query, maxHits: $maxHits) {
+    flat {
+      hits {
+        teaser {
+          item {
+            __typename
+            name
+            videoSvtId
+            urls { svtplay }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+SVT_PLAYABLE_PREFIXES = ("/video/", "/klipp/", "/kanaler/")
 
 class ContentMatcher:
     def __init__(self):
@@ -90,7 +110,91 @@ class ContentMatcher:
                 return True
         
         return False
-    
+
+    def search_svt(self, title: str) -> List[Dict]:
+        try:
+            response = requests.post(
+                SVT_GRAPHQL_URL,
+                json={
+                    "query": SVT_SEARCH_QUERY,
+                    "variables": {"query": title, "maxHits": 10},
+                },
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=10,
+            )
+            if response.status_code != 200:
+                logger.error(f"SVT search HTTP {response.status_code}")
+                return []
+            payload = response.json()
+        except Exception as e:
+            logger.error(f"SVT search error: {e}")
+            return []
+
+        if payload.get("errors") and not payload.get("data"):
+            logger.error(f"SVT search error: {payload['errors']}")
+            return []
+
+        hits = (
+            ((payload.get("data") or {}).get("searchPage") or {}).get("flat") or {}
+        ).get("hits") or []
+        items = []
+        for hit in hits:
+            item = self.svt_result_from_item(((hit or {}).get("teaser") or {}).get("item"))
+            if item:
+                items.append(item)
+        return self.rank_svt_results(items, title)
+
+    def svt_result_from_item(self, item: Optional[Dict]) -> Optional[Dict]:
+        if not item:
+            return None
+        name = (item.get("name") or "").strip()
+        url = self.svt_play_url(item)
+        if not name or not url:
+            return None
+        return {
+            "title": name,
+            "url": url,
+            "kind": item.get("__typename") or "",
+        }
+
+    def svt_play_url(self, item: Dict) -> Optional[str]:
+        path = ((item.get("urls") or {}).get("svtplay") or "").strip()
+        video_id = (item.get("videoSvtId") or "").strip()
+        # svtplay-dl only accepts /video, /klipp, and /kanaler pages.
+        if path.startswith(SVT_PLAYABLE_PREFIXES):
+            return f"https://www.svtplay.se{path}"
+        if video_id:
+            return f"https://www.svtplay.se/video/{video_id}"
+        return None
+
+    def rank_svt_results(self, items: List[Dict], title: str) -> List[Dict]:
+        return sorted(
+            items,
+            key=lambda item: self.svt_title_score(title, item.get("title") or ""),
+            reverse=True,
+        )
+
+    def best_svt_match(self, items: List[Dict], title: str) -> Optional[Dict]:
+        ranked = self.rank_svt_results(items, title)
+        return ranked[0] if ranked else None
+
+    def svt_title_score(self, query: str, candidate: str) -> int:
+        wanted = query.casefold().strip()
+        found = candidate.casefold().strip()
+        if not wanted or not found:
+            return 0
+        if wanted == found:
+            return 1000
+        if wanted in found or found in wanted:
+            return 500 + int(100 * min(len(wanted), len(found)) / max(len(wanted), len(found)))
+        wanted_words = set(wanted.split())
+        found_words = set(found.split())
+        return len(wanted_words & found_words)
+
     def get_best_match_url(self, urls: List[str], title: str) -> Optional[str]:
         if not urls:
             return None

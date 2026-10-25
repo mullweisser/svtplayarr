@@ -8,13 +8,6 @@ import time
 import shutil
 from pathlib import Path
 from flask import Flask, request, jsonify
-try:
-    from simple_justwatch_python_api import JustWatch
-    JUSTWATCH_AVAILABLE = True
-except ImportError:
-    print("Warning: JustWatch API not available - using direct search only")
-    JustWatch = None
-    JUSTWATCH_AVAILABLE = False
 import schedule
 import yaml
 from arr_integration import ArrIntegration
@@ -32,17 +25,6 @@ app = Flask(__name__)
 class SVTPlayArr:
     def __init__(self):
         self.config = self.load_config()
-        
-        # Initialize JustWatch if available
-        if JUSTWATCH_AVAILABLE and JustWatch:
-            self.justwatch = JustWatch(country='SE')
-            self.justwatch_no = JustWatch(country='NO')
-            logger.info("JustWatch API initialized for SE and NO")
-        else:
-            self.justwatch = None
-            self.justwatch_no = None
-            logger.warning("JustWatch API not available - using direct search only")
-            
         self.arr_integration = ArrIntegration()
         self.content_matcher = ContentMatcher()
         
@@ -83,30 +65,8 @@ class SVTPlayArr:
     
     def search_content(self, title, media_type='tv'):
         results = {'svt': [], 'nrk': []}
-        
-        # Only use JustWatch if available
-        if not JUSTWATCH_AVAILABLE or not self.justwatch:
-            logger.info("JustWatch not available, skipping API search")
-            return results
-        
-        if self.config['providers']['svt_play']:
-            try:
-                svt_results = self.justwatch.search_for_item(query=title)
-                for item in svt_results:
-                    if 'SVT Play' in [offer['provider_id'] for offer in item.get('offers', [])]:
-                        results['svt'].append(item)
-            except Exception as e:
-                logger.error(f"SVT search error: {e}")
-        
-        if self.config['providers']['nrk']:
-            try:
-                nrk_results = self.justwatch_no.search_for_item(query=title)
-                for item in nrk_results:
-                    if 'NRK TV' in [offer['provider_id'] for offer in item.get('offers', [])]:
-                        results['nrk'].append(item)
-            except Exception as e:
-                logger.error(f"NRK search error: {e}")
-        
+        if self.config.get('providers', {}).get('svt_play', True):
+            results['svt'] = self.content_matcher.search_svt(title)
         return results
     
     def build_svtplay_dl_command(self, url, output_path, media_type):
@@ -239,20 +199,14 @@ def webhook():
         
         # Try to download from available sources
         downloaded = False
-        
-        # First try JustWatch results
-        for provider, items in results.items():
-            if items and not downloaded:
-                urls = svtplayarr.content_matcher.extract_urls_from_justwatch(items, provider)
-                if urls:
-                    best_url = svtplayarr.content_matcher.get_best_match_url(urls, title)
-                    if best_url and svtplayarr.download_content(best_url, title, media_type):
-                        downloaded = True
-                        break
-        
-        # Fallback to direct search if JustWatch didn't work
+
+        if results['svt'] and svtplayarr.config.get('providers', {}).get('svt_play', True):
+            match = svtplayarr.content_matcher.best_svt_match(results['svt'], title)
+            if match and svtplayarr.content_matcher.validate_url(match['url'], 'svt'):
+                downloaded = svtplayarr.download_content(match['url'], title, media_type)
+
         if not downloaded:
-            for provider in ['svt', 'nrk']:
+            for provider in ['nrk']:
                 if not downloaded and svtplayarr.config['providers'].get(f'{provider}_play' if provider == 'svt' else provider):
                     direct_urls = svtplayarr.content_matcher.find_direct_urls(title, provider)
                     if direct_urls:
