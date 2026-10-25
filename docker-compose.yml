@@ -3,10 +3,11 @@ version: '3.8'
 services:
   svtplayarr:
     build: .
-    container_name: svtplayarr
+    # container_name removed — EasyPanel scopes names to avoid collisions
     restart: unless-stopped
-    ports:
-      - "2626:2626"
+    # ports removed — use EasyPanel Domains tab instead (point at service "svtplayarr", port 2626)
+    # ports:
+    #   - "2626:2626"
     volumes:
       - ./config:/config
       - ${MOVIES_PATH:-./downloads/movies}:/downloads/movies
@@ -20,12 +21,11 @@ services:
       - MOVIES_PATH=/downloads/movies
       - TV_PATH=/downloads/tv
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-   # networks:
-     # - arr-network
+    networks:
+      - default
+      - easypanel
 
-# networks:
- # arr-network:
-  # external: true
-    # If arr-network doesn't exist, create it with:
-    # docker network create arr-network
-    # Or change to: external: false to auto-create
+networks:
+  default:
+  easypanel:
+    external: true
